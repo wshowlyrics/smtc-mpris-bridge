@@ -1,7 +1,7 @@
 //! Measurement-only statistics for the probe (wshowlyrics/smtc-mpris-bridge#1).
 //! The real reader does not keep these: they grow with every update.
 
-use crate::timeline::{Observed, Update};
+use crate::timeline::{round1, Observed, Update};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 
@@ -32,10 +32,6 @@ impl AppStats {
         }
         self.unquantized += u32::from(u.unquantized);
     }
-}
-
-pub fn round1(v: f64) -> f64 {
-    (v * 10.0).round() / 10.0
 }
 
 fn spread(values: &[f64]) -> Value {

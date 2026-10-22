@@ -2,6 +2,16 @@
 //! the real reader (wshowlyrics/smtc-mpris-bridge#2) will send from, kept off
 //! WinRT so it is testable anywhere.
 
+/// Apple Music truncates positions to whole seconds (#1, note 4524).
+pub const QUANTUM_MS: f64 = 1_000.0;
+/// Boundary spacing in the first Apple Music log overshot by up to ~60 ms.
+pub const DEFAULT_SLACK_MS: f64 = 100.0;
+
+/// Milliseconds to 0.1 ms, as logged and sent.
+pub fn round1(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
+}
+
 /// Offset between the WinRT `DateTime` epoch (1601-01-01) and the Unix epoch, in 100 ns ticks.
 const WINRT_TO_UNIX_TICKS: i64 = 116_444_736_000_000_000;
 

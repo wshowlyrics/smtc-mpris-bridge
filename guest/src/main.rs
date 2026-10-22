@@ -1,5 +1,7 @@
 #[cfg(windows)]
 mod probe;
+#[cfg(windows)]
+mod smtc;
 // Only the Windows probe uses these; elsewhere they are built for their tests.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod stats;
@@ -21,8 +23,7 @@ fn main() -> ExitCode {
     }
     let mut out_dir = PathBuf::from("logs");
     let mut interval = Duration::from_secs(1);
-    // Boundary spacing in the first Apple Music log overshot by up to ~60 ms.
-    let mut slack_ms = 100.0;
+    let mut slack_ms = timeline::DEFAULT_SLACK_MS;
     while let Some(flag) = args.next() {
         let value = args.next();
         match (flag.as_str(), value) {
