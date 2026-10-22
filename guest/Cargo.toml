@@ -1,0 +1,19 @@
+[package]
+name = "smtc-mpris-bridge-guest"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+description = "Windows guest side of smtc-mpris-bridge: reads SMTC"
+
+[dependencies]
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+ctrlc = "3"
+windows = { version = "0.58", features = [
+    "Foundation",
+    "Foundation_Collections",
+    "Media",
+    "Media_Control",
+    "Storage_Streams",
+] }
