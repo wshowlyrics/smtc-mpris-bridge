@@ -9,6 +9,7 @@ can follow it.
 |---|---|---|
 | `guest` | Windows 10 1809+ / 11 | `probe` (log mode) only |
 | `host` | Linux | not started |
+| `protocol` | both | v1 message types; the contract is [docs/protocol.md](docs/protocol.md) |
 
 Work is tracked in the `wshowlyrics` group epic &1 on the self-hosted GitLab;
 this GitHub repository is a mirror.
