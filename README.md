@@ -7,12 +7,70 @@ can follow it.
 
 | Part | Runs on | Status |
 |---|---|---|
-| `guest` | Windows 10 1809+ / 11 | `probe` (log mode) only |
+| `guest` | Windows 10 1809+ / 11 | `run` sends to the host; `probe` logs SMTC |
 | `host` | Linux | not started |
 | `protocol` | both | v1 message types; the contract is [docs/protocol.md](docs/protocol.md) |
 
 Work is tracked in the `wshowlyrics` group epic &1 on the self-hosted GitLab;
 this GitHub repository is a mirror.
+
+## Sending to the host (`run`)
+
+```powershell
+.\smtc-mpris-bridge-guest.exe run --host 192.168.122.1 [--port 47800] [--guest NAME]
+```
+
+connects to the host, sends what each SMTC session plays as described in
+[docs/protocol.md](docs/protocol.md), and reconnects with backoff when the
+connection drops. `--guest` names the VM to the host and defaults to the
+computer name. Connections and errors go to stderr; Ctrl+C stops it.
+
+Until the host daemon exists (wshowlyrics/smtc-mpris-bridge#3), a listener on
+the host shows the stream as it arrives (port 47800 must be open on `virbr0`;
+see [Copying to the guest](#copying-to-the-guest) for the firewall):
+
+```bash
+nix-shell -p netcat-openbsd --run 'nc -lk 192.168.122.1 47800'
+```
+
+### Starting at logon
+
+SMTC sessions are only visible inside the interactive session of the user who
+plays the music, so the bridge cannot run as a service; a scheduled task that
+starts at that user's logon is the fit. After a reboot it starts once the user
+logs on.
+
+Run the command directly in a terminal first to see that it connects, then
+put the exe in a fixed place (the task breaks if the file moves) and register
+the task in PowerShell as that user:
+
+```powershell
+New-Item -ItemType Directory -Force $HOME\smtc-mpris-bridge | Out-Null
+Copy-Item $HOME\Downloads\smtc-mpris-bridge-guest.exe $HOME\smtc-mpris-bridge\
+
+$exe = "$HOME\smtc-mpris-bridge\smtc-mpris-bridge-guest.exe"
+$action = New-ScheduledTaskAction -Execute conhost.exe -Argument "--headless `"$exe`" run --host 192.168.122.1"
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+Register-ScheduledTask -TaskName smtc-mpris-bridge -Action $action -Trigger $trigger -Settings $settings
+```
+
+- `conhost --headless` runs it without a console window, so its log is not
+  visible; that is why the terminal run comes first.
+- Task Scheduler stops a task after 3 days by default; `ExecutionTimeLimit`
+  zero removes the limit for a VM that stays up.
+- `RestartCount`/`RestartInterval` restart it if it fails. An unreachable host
+  is not a failure: the bridge keeps reconnecting, backing off to 30 s.
+
+Start it without rebooting, check it, stop it (e.g. before replacing the exe,
+which cannot be overwritten while it runs) or remove it:
+
+```powershell
+Start-ScheduledTask -TaskName smtc-mpris-bridge
+Get-ScheduledTask -TaskName smtc-mpris-bridge | Select-Object State   # Running
+Stop-ScheduledTask -TaskName smtc-mpris-bridge
+Unregister-ScheduledTask -TaskName smtc-mpris-bridge -Confirm:$false
+```
 
 ## Measuring SMTC (`probe`)
 
@@ -89,6 +147,9 @@ with either backend:
 ```nix
 networking.firewall.interfaces.virbr0.allowedTCPPorts = [ 8000 ];
 ```
+
+The bridge itself needs port 47800 the same way (`--dport 47800` /
+`tcp dport 47800`, or `47800` in that list).
 
 ## License
 

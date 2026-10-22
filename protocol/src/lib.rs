@@ -6,6 +6,8 @@ use std::time::Duration;
 
 pub const VERSION: u32 = 1;
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
+/// Port the host listens on unless configured otherwise.
+pub const DEFAULT_PORT: u16 = 47800;
 
 /// Guest heartbeat while a player is playing.
 pub const HEARTBEAT_PLAYING: Duration = Duration::from_secs(1);

@@ -164,6 +164,7 @@ version = "0.0.0"
 dependencies = [
  "ctrlc",
  "serde_json",
+ "smtc-mpris-bridge-protocol",
  "windows",
 ]
 

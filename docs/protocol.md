@@ -10,7 +10,8 @@ wshowlyrics/smtc-mpris-bridge#1.
 
 - TCP. The guest connects to the host's address on the libvirt network (e.g.
   `192.168.122.1`); the host listens on that address only, never on all
-  interfaces. Host address and port are configuration on both sides.
+  interfaces. Host address and port are configuration on both sides; the port
+  defaults to 47800.
 - UTF-8 [JSON Lines](https://jsonlines.org/): one message per line, `\n`
   terminated, at most 64 KiB per line.
 - One direction only: the host never writes. Playback control (Play, Pause,
@@ -49,9 +50,9 @@ for that `player`; nothing is incremental.
 |---|---|
 | `player` | SMTC `SourceAppUserModelId`, unique per app within a guest |
 | `status` | `playing`, `paused` or `stopped` (see below) |
-| `track` | Current track, or `null` while the app reports none (an empty title) |
+| `track` | Current track, or `null` while the app reports none (an empty title or artist) |
 | `track.title` | Title |
-| `track.artists` | Artists; at least one entry |
+| `track.artists` | Artists; at least one non-empty entry |
 | `track.album` | Album, or `null` |
 | `track.length_ms` | Duration, or `null` when the app reports zero |
 | `position_ms` | **Position at the moment the guest writes the line**, already corrected (see below) |
@@ -80,7 +81,10 @@ update with the current time, so `Position + (now − LastUpdatedTime)` runs 0�
 late. The guest instead tracks the playback origin from the second boundaries
 it sees (`PhaseEstimator`) and sends the estimate for the moment of sending:
 about ±50 ms three seconds into playback, about ±10 ms after 25 seconds
-(#1, note 4534). The estimate restarts on pause, track change and seek.
+(#1, note 4534). The estimate restarts on pause, track change and seek. A
+conflict beyond the jitter slack that moves the estimate less than 1 s
+(`SEEK_THRESHOLD_MS`) also restarts it but is not a seek: Apple Music's stamps
+right after a seek or a track start do this, and the host would see no jump.
 
 `position_uncertainty_ms` is the estimator's half-width, but never below the
 jitter observed since the last restart: a range collapsed to a point is not
@@ -95,7 +99,11 @@ Apple Music puts `Artist — Album` in both `Artist` and `AlbumArtist` and leave
 occurrence: the left side is the artist, the right side the album. Artist names
 rarely contain the dash; album names are more likely to.
 
-Empty strings become `null` (`album`) or make `track` `null` (empty `title`).
+Empty strings become `null` (`album`) or make `track` `null` (empty `title`
+or artist). An empty artist is what Apple Music reports while it loads the
+next track, with a localized placeholder such as `연결 중…` as the title;
+sending it would make the host look up lyrics for the placeholder. A track
+that really has no artist is dropped along with it.
 Multiple artists are not split: SMTC gives one string.
 
 ### When to send

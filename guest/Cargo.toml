@@ -6,6 +6,7 @@ license.workspace = true
 description = "Windows guest side of smtc-mpris-bridge: reads SMTC"
 
 [dependencies]
+protocol = { package = "smtc-mpris-bridge-protocol", path = "../protocol" }
 serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
