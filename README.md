@@ -57,6 +57,39 @@ nix-shell --run 'cargo test'                                 # platform-independ
 The resulting `target/x86_64-pc-windows-gnu/release/smtc-mpris-bridge-guest.exe`
 imports only system DLLs, so copying that one file to the guest is enough.
 
+## Copying to the guest
+
+Serve the build output on the libvirt network only (check the address with
+`ip -4 addr show virbr0`; `192.168.122.1` is libvirt's default):
+
+```bash
+cd target/x86_64-pc-windows-gnu/release
+nix-shell -p python3 --run 'python3 -m http.server 8000 --bind 192.168.122.1'
+```
+
+and fetch it from the guest:
+
+```powershell
+Invoke-WebRequest http://192.168.122.1:8000/smtc-mpris-bridge-guest.exe -OutFile $HOME\Downloads\smtc-mpris-bridge-guest.exe
+```
+
+If the guest cannot connect, the host firewall is dropping the port on
+`virbr0`. On NixOS this opens it until the next reboot or `nixos-rebuild`:
+
+```bash
+# iptables backend (the default)
+sudo iptables -I nixos-fw -i virbr0 -p tcp --dport 8000 -j nixos-fw-accept
+# nftables backend (networking.nftables.enable = true)
+sudo nft insert rule inet nixos-fw input-allow iifname virbr0 tcp dport 8000 accept
+```
+
+To keep it open, declare it in the NixOS configuration instead; this works
+with either backend:
+
+```nix
+networking.firewall.interfaces.virbr0.allowedTCPPorts = [ 8000 ];
+```
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
