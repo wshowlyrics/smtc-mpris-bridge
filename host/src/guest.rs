@@ -1,6 +1,7 @@
 //! One guest connection: `hello`, then states republished as MPRIS players
 //! until the connection closes or goes quiet (docs/protocol.md).
 
+use crate::config::Players;
 use crate::mpris::GuestPlayer;
 use crate::names;
 use protocol::{Message, HOST_TIMEOUT, MAX_LINE_BYTES, VERSION};
@@ -9,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 use tokio::time::timeout;
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -75,21 +76,19 @@ async fn next<R: AsyncBufRead + Unpin>(
     }
 }
 
-struct Guest<'a> {
+/// Which apps to publish; replaced when the configuration is reloaded.
+pub type Filter = watch::Receiver<Players>;
+
+struct Guest {
     name: String,
-    ignore: &'a [String],
+    filter: Filter,
     players: HashMap<String, GuestPlayer>,
 }
 
-impl Guest<'_> {
-    fn ignored(&self, app: &str) -> bool {
-        let name = names::app_name(app);
-        self.ignore.iter().any(|i| i == app || i == name)
-    }
-
+impl Guest {
     async fn on_message(&mut self, message: Message) {
         match message {
-            Message::State(state) if !self.ignored(&state.player) => {
+            Message::State(state) if self.filter.borrow().publishes(&state.player) => {
                 let result = match self.players.get(&state.player) {
                     Some(player) => player.update(state).await,
                     None => {
@@ -118,14 +117,24 @@ impl Guest<'_> {
             Message::State(_) => {}
         }
     }
+
+    /// After a reload: drop the players the new filter no longer publishes.
+    /// Newly allowed apps appear with their next state.
+    async fn refilter(&mut self) {
+        let dropped: Vec<_> = {
+            let filter = self.filter.borrow_and_update();
+            self.players
+                .extract_if(|app, _| !filter.publishes(app))
+                .collect()
+        };
+        for (app, player) in dropped {
+            eprintln!("{}: {app} no longer published", self.name);
+            player.close().await;
+        }
+    }
 }
 
-async fn handle(
-    stream: TcpStream,
-    id: u64,
-    ignore: &[String],
-    guests: &Guests,
-) -> Result<(), Error> {
+async fn handle(stream: TcpStream, id: u64, filter: Filter, guests: &Guests) -> Result<(), Error> {
     let mut reader = BufReader::new(stream);
     let mut buf = Vec::new();
     let name = match next(&mut reader, &mut buf).await? {
@@ -140,7 +149,7 @@ async fn handle(
     let stop = guests.register(&name, id);
     let mut guest = Guest {
         name,
-        ignore,
+        filter,
         players: HashMap::new(),
     };
     let result = async {
@@ -151,6 +160,8 @@ async fn handle(
                     None => return Ok(()),
                 },
                 _ = stop.notified() => return Err("replaced by a newer connection".into()),
+                // Err only once the sender is gone, i.e. the daemon is exiting.
+                Ok(()) = guest.filter.changed() => guest.refilter().await,
             }
         }
     }
@@ -163,14 +174,8 @@ async fn handle(
     result
 }
 
-pub async fn serve(
-    stream: TcpStream,
-    peer: SocketAddr,
-    id: u64,
-    ignore: &[String],
-    guests: &Guests,
-) {
-    if let Err(e) = handle(stream, id, ignore, guests).await {
+pub async fn serve(stream: TcpStream, peer: SocketAddr, id: u64, filter: Filter, guests: Guests) {
+    if let Err(e) = handle(stream, id, filter, &guests).await {
         eprintln!("{peer}: {e}");
     }
 }

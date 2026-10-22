@@ -3,8 +3,11 @@ Description=Guest SMTC sessions as MPRIS players (smtc-mpris-bridge host)
 Documentation=https://github.com/wshowlyrics/smtc-mpris-bridge
 
 [Service]
-# Binds with IP_FREEBIND, so it starts fine before libvirt brings up virbr0.
-ExecStart=%h/.local/bin/smtc-mpris-bridge-host --listen 192.168.122.1
+# Settings come from ~/.config/smtc-mpris-bridge/host.ini. Binds with
+# IP_FREEBIND, so it starts fine before libvirt brings up virbr0.
+ExecStart=%h/.local/bin/smtc-mpris-bridge-host
+# Rereads host.ini; the listen address only changes on restart.
+ExecReload=kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 

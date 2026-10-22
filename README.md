@@ -75,17 +75,43 @@ Unregister-ScheduledTask -TaskName smtc-mpris-bridge -Confirm:$false
 ## Host daemon
 
 ```bash
-smtc-mpris-bridge-host [--listen ADDR[:PORT]] [--ignore APP]...
+smtc-mpris-bridge-host [--config FILE] [--listen ADDR[:PORT]] [--allow APP]... [--ignore APP]...
 ```
 
 listens on `192.168.122.1:47800` by default, only on that address, and
-publishes every session of every connected guest as its own MPRIS player:
+publishes each session of each connected guest as its own MPRIS player:
 `org.mpris.MediaPlayer2.smtc_mpris_bridge.<guest>.<app>`, e.g.
 `smtc_mpris_bridge.DESKTOP_G2NP3G0.AppleMusicWin` in `playerctl -l`. A player
 goes away when its app closes, when the guest disconnects, or after 15 s
-without a message. Playback control is not supported. `--ignore` takes an app
-id or app name (`SpotifyMusic`) not to publish, e.g. when the host's own
-Spotify already shows the guest's playback through Spotify Connect.
+without a message. Playback control is not supported.
+
+### Configuration
+
+`~/.config/smtc-mpris-bridge/host.ini` (or under `$XDG_CONFIG_HOME`; `--config`
+picks another file). Without it every app is published on the default address.
+
+```ini
+[host]
+listen = 192.168.122.1:47800
+
+[players]
+# Comma-separated app names (AppleMusicWin) or full app ids. Empty: every app.
+allow = AppleMusicWin
+# Taken out of what allow lets through.
+ignore =
+```
+
+`allow` keeps apps that come and go in the guest from turning into host
+players; `ignore` suits the opposite case, e.g. leaving out `SpotifyMusic` when
+the host's own Spotify already shows the guest's playback through Spotify
+Connect. The command-line options override the file, a list replacing the
+file's list, and keep doing so across reloads. Unknown sections and keys are
+errors, so a typo does not quietly publish everything.
+
+`systemctl --user reload smtc-mpris-bridge-host` (SIGHUP) rereads the file:
+players no longer allowed go away at once, newly allowed apps appear with
+their next state (within 5 s). A file that does not parse keeps the previous
+settings, and a new `listen` needs a restart.
 
 ### Installing as a user service
 

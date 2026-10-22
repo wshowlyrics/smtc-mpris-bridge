@@ -1,47 +1,71 @@
+mod config;
 mod guest;
 mod mpris;
 mod names;
 mod playback;
 
+use config::Config;
 use socket2::{Domain, Socket, Type};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{signal, SignalKind};
+use tokio::sync::watch;
 
-const USAGE: &str = "usage: smtc-mpris-bridge-host [--listen ADDR[:PORT]] [--ignore APP]...\n\
-     ADDR defaults to 192.168.122.1 (libvirt's default network), PORT to 47800";
+const USAGE: &str = "usage: smtc-mpris-bridge-host [--config FILE] [--listen ADDR[:PORT]] [--allow APP]... [--ignore APP]...\n\
+     FILE defaults to $XDG_CONFIG_HOME/smtc-mpris-bridge/host.ini; options override it";
 
+/// Command-line overrides of `host.ini`.
+#[derive(Default)]
 struct Args {
-    listen: SocketAddr,
-    /// SMTC app ids or app names (`SpotifyMusic`) not to publish.
+    config: Option<PathBuf>,
+    listen: Option<SocketAddr>,
+    allow: Vec<String>,
     ignore: Vec<String>,
 }
 
 fn parse(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
-    let mut parsed = Args {
-        listen: SocketAddr::from(([192, 168, 122, 1], protocol::DEFAULT_PORT)),
-        ignore: Vec::new(),
-    };
+    let mut parsed = Args::default();
     while let Some(flag) = args.next() {
         let value = args.next().ok_or(USAGE)?;
         match flag.as_str() {
+            "--config" => parsed.config = Some(PathBuf::from(value)),
             "--listen" => {
-                parsed.listen = value
-                    .parse()
-                    .or_else(|_| {
-                        value
-                            .parse::<IpAddr>()
-                            .map(|ip| SocketAddr::new(ip, protocol::DEFAULT_PORT))
-                    })
-                    .map_err(|_| format!("--listen: not an address: {value}"))?
+                parsed.listen =
+                    Some(config::parse_listen(&value).map_err(|e| format!("--listen: {e}"))?)
             }
+            "--allow" => parsed.allow.push(value),
             "--ignore" => parsed.ignore.push(value),
             _ => return Err(USAGE.into()),
         }
     }
     Ok(parsed)
+}
+
+impl Args {
+    /// The file's settings with these options laid over them. A list given on
+    /// the command line replaces the file's list rather than adding to it.
+    fn apply(&self, mut config: Config) -> Config {
+        if let Some(listen) = self.listen {
+            config.listen = listen;
+        }
+        if !self.allow.is_empty() {
+            config.players.allow = self.allow.clone();
+        }
+        if !self.ignore.is_empty() {
+            config.players.ignore = self.ignore.clone();
+        }
+        config
+    }
+
+    fn load(&self) -> Result<Config, String> {
+        let file = match self.config.clone().or_else(config::default_path) {
+            Some(path) => config::load(&path)?,
+            None => Config::default(),
+        };
+        Ok(self.apply(file))
+    }
 }
 
 /// Bind with `IP_FREEBIND`: started at login, the daemon can come up before
@@ -68,34 +92,60 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let listener = match listen(args.listen) {
+    let config = match args.load() {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let listener = match listen(config.listen) {
         Ok(listener) => listener,
         Err(e) => {
-            eprintln!("cannot listen on {}: {e}", args.listen);
+            eprintln!("cannot listen on {}: {e}", config.listen);
             return ExitCode::FAILURE;
         }
     };
-    let mut term = match signal(SignalKind::terminate()) {
-        Ok(term) => term,
-        Err(e) => {
-            eprintln!("cannot watch SIGTERM: {e}");
+    let signals = (
+        signal(SignalKind::terminate()),
+        signal(SignalKind::hangup()),
+    );
+    let (mut term, mut hup) = match signals {
+        (Ok(term), Ok(hup)) => (term, hup),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("cannot watch signals: {e}");
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("listening on {}", args.listen);
-    let ignore: Arc<[String]> = args.ignore.into();
+    eprintln!("listening on {}, {}", config.listen, config.players);
+    let (filter_tx, filter) = watch::channel(config.players);
     let guests = guest::Guests::default();
     let mut next_id = 0u64;
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, peer)) => {
-                    let (ignore, guests) = (ignore.clone(), guests.clone());
                     next_id += 1;
-                    let id = next_id;
-                    tokio::spawn(async move { guest::serve(stream, peer, id, &ignore, &guests).await });
+                    let serve = guest::serve(stream, peer, next_id, filter.clone(), guests.clone());
+                    tokio::spawn(serve);
                 }
                 Err(e) => eprintln!("accept: {e}"),
+            },
+            _ = hup.recv() => match args.load() {
+                Ok(new) => {
+                    if new.listen != config.listen {
+                        eprintln!("reload: listen changes need a restart; still on {}", config.listen);
+                    }
+                    // A list given on the command line wins over the file again.
+                    let pinned = if args.allow.is_empty() && args.ignore.is_empty() {
+                        ""
+                    } else {
+                        " (command-line lists kept)"
+                    };
+                    eprintln!("reload: {}{pinned}", new.players);
+                    filter_tx.send_replace(new.players);
+                }
+                Err(e) => eprintln!("reload: {e}; keeping the previous settings"),
             },
             _ = term.recv() => break,
             _ = tokio::signal::ctrl_c() => break,
@@ -114,25 +164,26 @@ mod tests {
     }
 
     #[test]
-    fn listen_takes_an_address_with_or_without_a_port() {
-        assert_eq!(args(&[]).unwrap().listen.to_string(), "192.168.122.1:47800");
-        assert_eq!(
-            args(&["--listen", "10.0.0.1"]).unwrap().listen.to_string(),
-            "10.0.0.1:47800"
-        );
-        assert_eq!(
-            args(&["--listen", "127.0.0.1:5000"])
-                .unwrap()
-                .listen
-                .to_string(),
-            "127.0.0.1:5000"
-        );
-        assert!(args(&["--listen", "virbr0"]).is_err());
+    fn options_override_the_file() {
+        let file =
+            config::parse("[host]\nlisten = 10.0.0.1\n[players]\nallow = A\nignore = B\n").unwrap();
+
+        let none = args(&[])
+            .unwrap()
+            .apply(config::parse("[players]\nallow = A\n").unwrap());
+        assert_eq!(none.players.allow, ["A"]);
+
+        let a = args(&["--listen", "127.0.0.1:5000", "--allow", "X", "--allow", "Y"]).unwrap();
+        let c = a.apply(file);
+        assert_eq!(c.listen.to_string(), "127.0.0.1:5000");
+        assert_eq!(c.players.allow, ["X", "Y"]);
+        assert_eq!(c.players.ignore, ["B"]);
     }
 
     #[test]
-    fn ignore_repeats() {
-        let a = args(&["--ignore", "SpotifyMusic", "--ignore", "x!y"]).unwrap();
-        assert_eq!(a.ignore, ["SpotifyMusic", "x!y"]);
+    fn bad_options_are_errors() {
+        assert!(args(&["--listen", "virbr0"]).is_err());
+        assert!(args(&["--allow"]).is_err());
+        assert!(args(&["--bogus", "x"]).is_err());
     }
 }

@@ -61,6 +61,7 @@ Measured on Apple Music in #1 (notes 4524, 4534); the rules are in `docs/protoco
 - `playback.rs` (D-Bus-free, tested) — the last state, `position_ms(now)` extrapolation, and which signals a new state calls for (`Seeked` on `seek: true` or a heartbeat more than `SEEK_THRESHOLD_MS` off).
 - `mpris.rs` — `GuestPlayer` owns its **own zbus connection**: every MPRIS player sits at `/org/mpris/MediaPlayer2`, so two cannot share one. Names are requested with allow/replace flags so a reconnecting guest takes its names over from the stale connection. `Position` is computed on read and never signalled (MPRIS rule; wshowlyrics polls it with `Properties.Get`).
 - `names.rs` — `org.mpris.MediaPlayer2.smtc_mpris_bridge.<guest>.<app>`; wshowlyrics' `preferred_players` and playerctl match `smtc_mpris_bridge` up to the `.`.
+- `config.rs` — `host.ini` (hand-written INI parser, strict about unknown keys) and the `allow`/`ignore` filter. `main.rs` lays CLI options over it and rereads it on SIGHUP; the filter reaches every connection through a `watch` channel, and a change drops players that are no longer allowed.
 
 Players are removed rather than left `Stopped` on disconnect: wshowlyrics switches players on `NameOwnerChanged`, not on a stopped status.
 
