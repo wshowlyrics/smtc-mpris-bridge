@@ -132,5 +132,8 @@ lyrics jump back and forth.
 - Emit MPRIS `Seeked` for `seek: true`, and also when a heartbeat's position is
   more than 1 s away from the extrapolated one (a seek the guest missed).
 - Publish one MPRIS player per (`guest`, `player`) pair.
+- A new track is a change of `title`, `artists` or `album`; it gets a new
+  `mpris:trackid`. A `length_ms` that arrives after the title is the same
+  track. Replaying the same track is not a new track: it shows as a seek to 0.
 - Remove a connection's players when it closes, or when nothing arrives on it
   for 15 s (three missed keepalives).

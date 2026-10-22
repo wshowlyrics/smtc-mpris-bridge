@@ -8,7 +8,7 @@ can follow it.
 | Part | Runs on | Status |
 |---|---|---|
 | `guest` | Windows 10 1809+ / 11 | `run` sends to the host; `probe` logs SMTC |
-| `host` | Linux | not started |
+| `host` | Linux | publishes each guest session as an MPRIS player |
 | `protocol` | both | v1 message types; the contract is [docs/protocol.md](docs/protocol.md) |
 
 Work is tracked in the `wshowlyrics` group epic &1 on the self-hosted GitLab;
@@ -25,9 +25,9 @@ connects to the host, sends what each SMTC session plays as described in
 connection drops. `--guest` names the VM to the host and defaults to the
 computer name. Connections and errors go to stderr; Ctrl+C stops it.
 
-Until the host daemon exists (wshowlyrics/smtc-mpris-bridge#3), a listener on
-the host shows the stream as it arrives (port 47800 must be open on `virbr0`;
-see [Copying to the guest](#copying-to-the-guest) for the firewall):
+Port 47800 must be open on the host's `virbr0` (see
+[Copying to the guest](#copying-to-the-guest) for the firewall). To see the
+stream itself instead of the host daemon, listen with `nc`:
 
 ```bash
 nix-shell -p netcat-openbsd --run 'nc -lk 192.168.122.1 47800'
@@ -72,6 +72,45 @@ Stop-ScheduledTask -TaskName smtc-mpris-bridge
 Unregister-ScheduledTask -TaskName smtc-mpris-bridge -Confirm:$false
 ```
 
+## Host daemon
+
+```bash
+smtc-mpris-bridge-host [--listen ADDR[:PORT]] [--ignore APP]...
+```
+
+listens on `192.168.122.1:47800` by default, only on that address, and
+publishes every session of every connected guest as its own MPRIS player:
+`org.mpris.MediaPlayer2.smtc_mpris_bridge.<guest>.<app>`, e.g.
+`smtc_mpris_bridge.DESKTOP_G2NP3G0.AppleMusicWin` in `playerctl -l`. A player
+goes away when its app closes, when the guest disconnects, or after 15 s
+without a message. Playback control is not supported. `--ignore` takes an app
+id or app name (`SpotifyMusic`) not to publish, e.g. when the host's own
+Spotify already shows the guest's playback through Spotify Connect.
+
+### Installing as a user service
+
+```bash
+nix-shell --run 'cargo install --path host --root ~/.local'
+mkdir -p ~/.config/systemd/user
+cp host/smtc-mpris-bridge-host.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now smtc-mpris-bridge-host
+journalctl --user -u smtc-mpris-bridge-host -f
+```
+
+The daemon binds with `IP_FREEBIND`, so it starts at login even before libvirt
+has brought up `virbr0`. On NixOS, a binary built in `nix-shell` refers to
+store paths a garbage collection can remove; rebuild it after one.
+
+### With wshowlyrics
+
+- `preferred_players = smtc_mpris_bridge` in `[lyrics]` matches every guest
+  player.
+- The players carry no `xesam:url`, so local lyrics are found only by the
+  `<artist> - <title>.<ext>` name patterns (e.g. in `~/.lyrics/`), otherwise
+  from lrclib.
+- Delay in the guest's audio path is corrected with `global_offset_ms`.
+
 ## Measuring SMTC (`probe`)
 
 Before the bridge sends anything, `probe` records what each app publishes to
@@ -108,7 +147,7 @@ The guest is cross-built from Linux with the mingw-w64 linker; on NixOS
 
 ```bash
 nix-shell --run 'rustup target add x86_64-pc-windows-gnu'   # once
-nix-shell --run 'cargo build --release --target x86_64-pc-windows-gnu'
+nix-shell --run 'cargo build -p smtc-mpris-bridge-guest --release --target x86_64-pc-windows-gnu'
 nix-shell --run 'cargo test'                                 # platform-independent parts
 ```
 

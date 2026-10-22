@@ -1,6 +1,6 @@
 # Rust toolchain plus the mingw-w64 linker for cross-building the Windows guest:
 #   nix-shell --run 'rustup target add x86_64-pc-windows-gnu'   # once
-#   nix-shell --run 'cargo build --release --target x86_64-pc-windows-gnu'
+#   nix-shell --run 'cargo build -p smtc-mpris-bridge-guest --release --target x86_64-pc-windows-gnu'
 { pkgs ? import <nixpkgs> { } }:
 
 let
