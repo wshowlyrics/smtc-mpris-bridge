@@ -20,6 +20,7 @@ pub struct Config {
 }
 
 /// Which apps to publish. Entries are app ids or app names (`AppleMusicWin`).
+/// Browsers are left out before either list applies ([`names::is_browser`]).
 #[derive(Debug, Default, PartialEq)]
 pub struct Players {
     /// Empty publishes every app.
@@ -32,7 +33,9 @@ impl Players {
     pub fn publishes(&self, aumid: &str) -> bool {
         let name = names::app_name(aumid);
         let matches = |list: &[String]| list.iter().any(|e| e == aumid || e == name);
-        (self.allow.is_empty() || matches(&self.allow)) && !matches(&self.ignore)
+        !names::is_browser(name)
+            && (self.allow.is_empty() || matches(&self.allow))
+            && !matches(&self.ignore)
     }
 }
 
@@ -187,6 +190,16 @@ mod tests {
             ignore: vec![SPOTIFY.into()],
         };
         assert!(no_spotify.publishes(APPLE) && !no_spotify.publishes(SPOTIFY));
+    }
+
+    #[test]
+    fn browsers_are_never_published() {
+        let edge = Players {
+            allow: vec!["MSEdge".into()],
+            ignore: vec![],
+        };
+        assert!(!edge.publishes("MSEdge"));
+        assert!(!Players::default().publishes("Chrome"));
     }
 
     #[test]

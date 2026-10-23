@@ -80,7 +80,8 @@ smtc-mpris-bridge-host [--config FILE] [--listen ADDR[:PORT]] [--allow APP]... [
 ```
 
 listens on `192.168.122.1:47800` by default, only on that address, and
-publishes each session of each connected guest as its own MPRIS player:
+publishes each session of each connected guest, browsers excepted, as its own
+MPRIS player:
 `org.mpris.MediaPlayer2.smtc_mpris_bridge.<guest>.<app>`, e.g.
 `smtc_mpris_bridge.DESKTOP_G2NP3G0.AppleMusicWin` in `playerctl -l`. A player
 goes away when its app closes, when the guest disconnects, or after 15 s
@@ -108,6 +109,10 @@ the host's own Spotify already shows the guest's playback through Spotify
 Connect. The command-line options override the file, a list replacing the
 file's list, and keep doing so across reloads. Unknown sections and keys are
 errors, so a typo does not quietly publish everything.
+
+Browsers (`MSEdge`, `Chrome`, …) are never published, even when listed in
+`allow`. wshowlyrics never follows a browser, but it cannot tell a guest
+browser from its player name, so the bridge hardcodes the same rule.
 
 `systemctl --user reload smtc-mpris-bridge-host` (SIGHUP) rereads the file:
 players no longer allowed go away at once, newly allowed apps appear with

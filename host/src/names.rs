@@ -23,6 +23,20 @@ pub fn app_name(aumid: &str) -> &str {
     }
 }
 
+/// Browsers are never published, whatever `host.ini` says: wshowlyrics never
+/// follows a browser (wshowlyrics/wshowlyrics#14 on GitHub), and its own check
+/// cannot see a guest browser behind a `smtc_mpris_bridge.*` name. Same words
+/// as its `is_browser_or_proxy`, but without case: Windows reports `MSEdge` and
+/// `Chrome`.
+pub fn is_browser(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    [
+        "chrome", "chromium", "firefox", "vivaldi", "brave", "edge", "opera",
+    ]
+    .iter()
+    .any(|b| app.contains(b))
+}
+
 /// One bus name element: `[A-Za-z0-9_]`, not starting with a digit. `-` is
 /// legal but discouraged by the D-Bus spec, so it becomes `_` too.
 fn element(s: &str) -> String {
