@@ -7,6 +7,9 @@ description = "Linux host side of smtc-mpris-bridge: republishes guest SMTC sess
 
 [dependencies]
 protocol = { package = "smtc-mpris-bridge-protocol", path = "../protocol" }
+
+# The daemon proper; elsewhere only the platform-independent parts build.
+[target.'cfg(target_os = "linux")'.dependencies]
 socket2.workspace = true
 tokio = { version = "1.54.1", features = ["rt", "macros", "net", "io-util", "time", "sync", "signal"] }
 zbus = { version = "6.0.0", default-features = false, features = ["tokio", "service"] }

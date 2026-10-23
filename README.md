@@ -191,8 +191,8 @@ cargo test   # platform-independent parts of every crate
 On NixOS, `shell.nix` provides rustup, the linker and that variable: run the
 same commands as `nix-shell --run '…'`.
 
-Name the package (`-p`) for the Windows target: the workspace also holds the
-Linux-only host, which does not build for Windows. The resulting
+`-p` keeps the Windows build to the guest; the host is Linux-only, and for
+Windows it builds only as a stub that says so. The resulting
 `target/x86_64-pc-windows-gnu/release/smtc-mpris-bridge-guest.exe` imports
 only system DLLs, so copying that one file to the guest is enough.
 
@@ -243,6 +243,7 @@ the rustup installer offers to set them up. Then, in the guest:
 git clone https://github.com/wshowlyrics/smtc-mpris-bridge
 cd smtc-mpris-bridge
 cargo build -p smtc-mpris-bridge-guest --release
+cargo test   # every crate's tests; the host's Linux-only parts are skipped
 ```
 
 The exe is `target\release\smtc-mpris-bridge-guest.exe`, with its `.pdb` next
