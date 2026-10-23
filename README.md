@@ -27,10 +27,11 @@ computer name. Connections and errors go to stderr; Ctrl+C stops it.
 
 Port 47800 must be open on the host's `virbr0` (see
 [Copying to the guest](#copying-to-the-guest) for the firewall). To see the
-stream itself instead of the host daemon, listen with `nc`:
+stream itself instead of the host daemon, listen with OpenBSD `nc` (on NixOS,
+`nix-shell -p netcat-openbsd`):
 
 ```bash
-nix-shell -p netcat-openbsd --run 'nc -lk 192.168.122.1 47800'
+nc -lk 192.168.122.1 47800
 ```
 
 ### Starting at logon
@@ -116,7 +117,7 @@ settings, and a new `listen` needs a restart.
 ### Installing as a user service
 
 ```bash
-nix-shell --run 'cargo install --path host --root ~/.local'
+cargo install --path host --root ~/.local   # on NixOS: inside nix-shell
 mkdir -p ~/.config/systemd/user
 cp host/smtc-mpris-bridge-host.service ~/.config/systemd/user/
 systemctl --user daemon-reload
@@ -168,26 +169,41 @@ row; conflicts up to `--slack-ms` count as jitter, larger ones as seeks):
 
 ## Building
 
-The guest is cross-built from Linux with the mingw-w64 linker; on NixOS
-`shell.nix` provides both:
+The host daemon builds on Linux. The guest builds either on that same Linux
+host (cross-compiled, then copied into the VM) or inside the Windows guest
+itself.
+
+### On Linux: host daemon, and the guest cross-built
+
+Needs [rustup](https://rustup.rs/) and the mingw-w64 cross compiler
+(`gcc-mingw-w64-x86-64` on Debian/Ubuntu, `mingw-w64-gcc` on Arch,
+`mingw64-gcc` on Fedora) as the Windows linker:
 
 ```bash
-nix-shell --run 'rustup target add x86_64-pc-windows-gnu'   # once
-nix-shell --run 'cargo build -p smtc-mpris-bridge-guest --release --target x86_64-pc-windows-gnu'
-nix-shell --run 'cargo test'                                 # platform-independent parts
+rustup target add x86_64-pc-windows-gnu   # once
+export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc
+
+cargo build -p smtc-mpris-bridge-host --release
+cargo build -p smtc-mpris-bridge-guest --release --target x86_64-pc-windows-gnu
+cargo test   # platform-independent parts of every crate
 ```
 
-The resulting `target/x86_64-pc-windows-gnu/release/smtc-mpris-bridge-guest.exe`
-imports only system DLLs, so copying that one file to the guest is enough.
+On NixOS, `shell.nix` provides rustup, the linker and that variable: run the
+same commands as `nix-shell --run '…'`.
 
-## Copying to the guest
+Name the package (`-p`) for the Windows target: the workspace also holds the
+Linux-only host, which does not build for Windows. The resulting
+`target/x86_64-pc-windows-gnu/release/smtc-mpris-bridge-guest.exe` imports
+only system DLLs, so copying that one file to the guest is enough.
+
+#### Copying to the guest
 
 Serve the build output on the libvirt network only (check the address with
 `ip -4 addr show virbr0`; `192.168.122.1` is libvirt's default):
 
 ```bash
 cd target/x86_64-pc-windows-gnu/release
-nix-shell -p python3 --run 'python3 -m http.server 8000 --bind 192.168.122.1'
+python3 -m http.server 8000 --bind 192.168.122.1
 ```
 
 and fetch it from the guest:
@@ -197,7 +213,8 @@ Invoke-WebRequest http://192.168.122.1:8000/smtc-mpris-bridge-guest.exe -OutFile
 ```
 
 If the guest cannot connect, the host firewall is dropping the port on
-`virbr0`. On NixOS this opens it until the next reboot or `nixos-rebuild`:
+`virbr0`; allow TCP 8000 there in whatever firewall the host runs. On NixOS
+this opens it until the next reboot or `nixos-rebuild`:
 
 ```bash
 # iptables backend (the default)
@@ -215,6 +232,32 @@ networking.firewall.interfaces.virbr0.allowedTCPPorts = [ 8000 ];
 
 The bridge itself needs port 47800 the same way (`--dport 47800` /
 `tcp dport 47800`, or `47800` in that list).
+
+### On Windows: the guest, built inside the VM
+
+Needs [rustup](https://rustup.rs/) with its default MSVC toolchain, which in
+turn needs the Visual Studio Build Tools ("Desktop development with C++");
+the rustup installer offers to set them up. Then, in the guest:
+
+```powershell
+git clone https://github.com/wshowlyrics/smtc-mpris-bridge
+cd smtc-mpris-bridge
+cargo build -p smtc-mpris-bridge-guest --release
+```
+
+The exe is `target\release\smtc-mpris-bridge-guest.exe`, with its `.pdb` next
+to it; keep both, since a crash dump only shows function names with the
+`.pdb`. An MSVC build links the Visual C++ runtime dynamically, so another
+Windows machine may also need the Visual C++ Redistributable.
+
+Stop the scheduled task before rebuilding or replacing the exe: Windows does
+not let a running exe be overwritten.
+
+```powershell
+Stop-ScheduledTask -TaskName smtc-mpris-bridge
+cargo build -p smtc-mpris-bridge-guest --release
+Start-ScheduledTask -TaskName smtc-mpris-bridge
+```
 
 ## License
 
