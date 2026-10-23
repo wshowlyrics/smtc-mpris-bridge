@@ -5,7 +5,11 @@ use crate::player::{self, Player};
 use crate::smtc::{self, now_ms, Event, Kind, Session, Smtc, Status as SmtcStatus};
 use crate::timeline::DEFAULT_SLACK_MS;
 use crate::RunArgs;
-use protocol::{encode, Message, Status, HEARTBEAT_IDLE, HEARTBEAT_PLAYING, VERSION};
+use protocol::{
+    encode, Message, Status, HEARTBEAT_IDLE, HEARTBEAT_PLAYING, KEEPALIVE_IDLE, KEEPALIVE_INTERVAL,
+    KEEPALIVE_RETRIES, VERSION,
+};
+use socket2::{SockRef, TcpKeepalive};
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -65,6 +69,11 @@ impl Link {
             let stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)?;
             stream.set_nodelay(true)?;
             stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
+            let keepalive = TcpKeepalive::new()
+                .with_time(KEEPALIVE_IDLE)
+                .with_interval(KEEPALIVE_INTERVAL)
+                .with_retries(KEEPALIVE_RETRIES);
+            SockRef::from(&stream).set_tcp_keepalive(&keepalive)?;
             Ok((addr, stream))
         });
         match connected {
@@ -89,6 +98,27 @@ impl Link {
         self.stream = None;
         self.retry_at = Instant::now() + self.backoff;
         self.backoff = (self.backoff * 2).min(BACKOFF_MAX);
+    }
+
+    /// The host never writes, so anything readable means it closed the
+    /// connection (or keepalive gave up on it). Without this a guest with no
+    /// sessions, which writes nothing, would only notice at its next write.
+    fn check(&mut self) {
+        let Some(stream) = &self.stream else {
+            return;
+        };
+        let peeked = stream.set_nonblocking(true).and_then(|()| {
+            let peeked = stream.peek(&mut [0u8; 1]);
+            stream.set_nonblocking(false)?;
+            peeked
+        });
+        match peeked {
+            Ok(0) => self.retry_later("the host closed the connection"),
+            Err(e) if e.kind() != std::io::ErrorKind::WouldBlock => {
+                self.retry_later(&format!("connection lost: {e}"))
+            }
+            _ => {}
+        }
     }
 
     fn send(&mut self, message: &Message) {
@@ -205,8 +235,10 @@ impl Bridge {
         }
     }
 
-    /// Reconnect, settle seeks and send heartbeats that are due.
+    /// Notice a closed connection, reconnect, settle seeks and send heartbeats
+    /// that are due. Runs at least every `HEARTBEAT_IDLE`, sessions or not.
     fn tick(&mut self) {
+        self.link.check();
         if self.link.connect_if_due() {
             self.link.send(&Message::Hello {
                 v: VERSION,

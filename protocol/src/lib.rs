@@ -13,8 +13,15 @@ pub const DEFAULT_PORT: u16 = 47800;
 pub const HEARTBEAT_PLAYING: Duration = Duration::from_secs(1);
 /// Guest keepalive while a player is paused or stopped.
 pub const HEARTBEAT_IDLE: Duration = Duration::from_secs(5);
-/// Host drops a connection's players after this long without a message.
+/// Host drops a connection's players after this long without a message. A
+/// connection without players is left open: a guest with no sessions has
+/// nothing to send.
 pub const HOST_TIMEOUT: Duration = Duration::from_secs(15);
+/// TCP keepalive on both ends, so a peer that vanished while nothing is being
+/// sent is noticed within about a minute.
+pub const KEEPALIVE_IDLE: Duration = Duration::from_secs(30);
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+pub const KEEPALIVE_RETRIES: u32 = 3;
 /// A heartbeat this far from the extrapolated position counts as a seek.
 pub const SEEK_THRESHOLD_MS: f64 = 1_000.0;
 

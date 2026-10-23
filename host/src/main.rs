@@ -5,7 +5,7 @@ mod names;
 mod playback;
 
 use config::Config;
-use socket2::{Domain, Socket, Type};
+use socket2::{Domain, Socket, TcpKeepalive, Type};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -69,10 +69,17 @@ impl Args {
 }
 
 /// Bind with `IP_FREEBIND`: started at login, the daemon can come up before
-/// libvirt has created `virbr0` and its address.
+/// libvirt has created `virbr0` and its address. Accepted connections inherit
+/// the listener's TCP keepalive.
 fn listen(addr: SocketAddr) -> std::io::Result<TcpListener> {
     let socket = Socket::new(Domain::for_address(addr), Type::STREAM, None)?;
     socket.set_reuse_address(true)?;
+    socket.set_tcp_keepalive(
+        &TcpKeepalive::new()
+            .with_time(protocol::KEEPALIVE_IDLE)
+            .with_interval(protocol::KEEPALIVE_INTERVAL)
+            .with_retries(protocol::KEEPALIVE_RETRIES),
+    )?;
     match addr {
         SocketAddr::V4(_) => socket.set_freebind_v4(true)?,
         SocketAddr::V6(_) => socket.set_freebind_v6(true)?,

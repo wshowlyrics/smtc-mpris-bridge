@@ -1,5 +1,6 @@
 //! One guest connection: `hello`, then states republished as MPRIS players
-//! until the connection closes or goes quiet (docs/protocol.md).
+//! until the connection closes, or goes quiet while it has players
+//! (docs/protocol.md).
 
 use crate::config::Players;
 use crate::mpris::GuestPlayer;
@@ -8,6 +9,7 @@ use protocol::{Message, HOST_TIMEOUT, MAX_LINE_BYTES, VERSION};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::{watch, Notify};
@@ -45,18 +47,24 @@ impl Guests {
 }
 
 /// The next message, or `None` once the guest closes the connection. Lines
-/// that are not a message this side knows are logged and skipped.
+/// that are not a message this side knows are logged and skipped. `quiet` is
+/// how long the guest may stay silent; `None` waits indefinitely.
 async fn next<R: AsyncBufRead + Unpin>(
     reader: &mut R,
     buf: &mut Vec<u8>,
+    quiet: Option<Duration>,
 ) -> Result<Option<Message>, Error> {
     loop {
         buf.clear();
         let limit = MAX_LINE_BYTES as u64 + 1; // the newline
         let mut line = (&mut *reader).take(limit);
-        let n = timeout(HOST_TIMEOUT, line.read_until(b'\n', buf))
-            .await
-            .map_err(|_| format!("nothing for {} s", HOST_TIMEOUT.as_secs()))??;
+        let read = line.read_until(b'\n', buf);
+        let n = match quiet {
+            Some(quiet) => timeout(quiet, read)
+                .await
+                .map_err(|_| format!("nothing for {} s", quiet.as_secs()))??,
+            None => read.await?,
+        };
         if n == 0 {
             return Ok(None);
         }
@@ -137,7 +145,7 @@ impl Guest {
 async fn handle(stream: TcpStream, id: u64, filter: Filter, guests: &Guests) -> Result<(), Error> {
     let mut reader = BufReader::new(stream);
     let mut buf = Vec::new();
-    let name = match next(&mut reader, &mut buf).await? {
+    let name = match next(&mut reader, &mut buf, Some(HOST_TIMEOUT)).await? {
         Some(Message::Hello { v, guest }) if v == VERSION => guest,
         Some(Message::Hello { v, .. }) => {
             return Err(format!("guest speaks protocol {v}, this host {VERSION}").into())
@@ -154,8 +162,10 @@ async fn handle(stream: TcpStream, id: u64, filter: Filter, guests: &Guests) -> 
     };
     let result = async {
         loop {
+            // Only while there are players to take down; see HOST_TIMEOUT.
+            let quiet = (!guest.players.is_empty()).then_some(HOST_TIMEOUT);
             tokio::select! {
-                message = next(&mut reader, &mut buf) => match message? {
+                message = next(&mut reader, &mut buf, quiet) => match message? {
                     Some(message) => guest.on_message(message).await,
                     None => return Ok(()),
                 },
@@ -193,7 +203,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut out = Vec::new();
         loop {
-            match next(&mut reader, &mut buf).await {
+            match next(&mut reader, &mut buf, Some(HOST_TIMEOUT)).await {
                 Ok(Some(m)) => out.push(Some(m)),
                 Ok(None) => return (out, None),
                 Err(e) => return (out, Some(e.to_string())),

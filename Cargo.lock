@@ -374,6 +374,7 @@ dependencies = [
  "ctrlc",
  "serde_json",
  "smtc-mpris-bridge-protocol",
+ "socket2",
  "windows",
 ]
 

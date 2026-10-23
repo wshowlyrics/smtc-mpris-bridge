@@ -17,6 +17,10 @@ wshowlyrics/smtc-mpris-bridge#1.
 - One direction only: the host never writes. Playback control (Play, Pause,
   Seek) is out of scope for v1.
 - On disconnect the guest reconnects with backoff and starts over with `hello`.
+- Both ends enable TCP keepalive (30 s idle, then 3 probes 10 s apart). A guest
+  with no media sessions sends nothing after `hello`, so this is what notices a
+  peer that vanished meanwhile. The guest also checks its socket for the host
+  closing it, since the host never writes.
 
 ## Messages
 
@@ -136,4 +140,6 @@ lyrics jump back and forth.
   `mpris:trackid`. A `length_ms` that arrives after the title is the same
   track. Replaying the same track is not a new track: it shows as a seek to 0.
 - Remove a connection's players when it closes, or when nothing arrives on it
-  for 15 s (three missed keepalives).
+  for 15 s while it has players (three missed keepalives). A connection with no
+  players is kept open however long it is quiet; TCP keepalive closes it if the
+  guest is gone.
